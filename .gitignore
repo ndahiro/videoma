@@ -1,0 +1,68 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Env files (contains NGC key + DB creds)
+.env
+.env.local
+.env.*.local
+ui/apps/vss-ui/.env.local
+
+# Models — never commit weight tarballs or NIM volumes
+models/**/*.tar
+models/**/*.tar.gz
+models/**/*.tar.bz2
+models/**/*.tar.zst
+models/.env*
+*.docker-image
+docker-images/
+
+# Docker volumes / cache
+.cosmos3_reasoner_cache/
+.nemotron_3_5_lightning_cache/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.cursor/
+.idea/
+.kilo/
+.kilocode/
+
+# Drizzle migrations (local)
+drizzle/
+
+# Python virtualenvs (GBs, rebuild via uv sync)
+.venv/
+agent/.venv/
+
+# Local runtime scratch
+agent/.tmp/
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# TS build caches
+*.tsbuildinfo

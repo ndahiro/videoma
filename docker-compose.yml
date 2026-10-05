@@ -1,0 +1,391 @@
+
+services:
+  # ──────────────────────────────────────────────
+  # Auth DB — PostgreSQL for user accounts
+  # ──────────────────────────────────────────────
+  vss-auth-db:
+    image: postgres:16-alpine
+    container_name: vss-auth-db
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: vss
+      POSTGRES_PASSWORD: vss_secret
+      POSTGRES_DB: vss_auth
+      # Connection budget for scale: app instances use PG_POOL_MAX each
+      # (default 25). 200 covers several instances plus drizzle-kit/admin.
+      # Raise shared_buffers with host RAM (rule of thumb: 25% of RAM).
+      PG_MAX_CONNECTIONS: ${PG_MAX_CONNECTIONS:-200}
+    command:
+      - postgres
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-200}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+    volumes:
+      - vss-auth-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vss -d vss_auth"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # VSS Agent — Python backend (NVIDIA AIQ Toolkit).
+  #   - ON by default (builds from agent/docker/Dockerfile)
+  #   - Talks to either vLLM (LLM_MODEL_TYPE=openai) or NIM (LLM_MODEL_TYPE=nim)
+  #   - Talks to VST for video storage (not started here; see comments below)
+  # ──────────────────────────────────────────────
+  vss-agent:
+    build:
+      context: .
+      dockerfile: agent/docker/Dockerfile
+    container_name: vss-agent
+    ports:
+      - "8000:8000"
+    command: ["serve", "--config_file", "/vss-agent/deployments/developer-workflow/dev-profile-base/vss-agent/configs/config.yml", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    environment:
+      - VSS_AGENT_PORT=8000
+      - VSS_AGENT_URL=http://vss-agent:8000
+      - VSS_AGENT_HOST=vss-agent
+      - NGC_CLI_API_KEY=${NGC_CLI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_BASE_URL=${HF_BASE_URL:-https://router.huggingface.co/hf-inference/v1}
+      - HF_LLM_NAME=${HF_LLM_NAME:-meta-llama/Llama-3.3-70B-Instruct}
+      - HF_VLM_NAME=${HF_VLM_NAME:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - HF_EMBED_NAME=${HF_EMBED_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBED_PROVIDER=${EMBED_PROVIDER:-huggingface}
+    volumes:
+      - ./deployments:/vss-agent/deployments:ro
+      - vss-uploads:/uploads
+    # No curl/sh in the agent image: probe with the venv python directly.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/vss-agent/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # Shared rate-limit budgets (Redis). The app falls back to per-instance
+  # memory when REDIS_URL is unset; set it (below) so all vss-ui replicas
+  # behind the load balancer share one budget. No persistence beyond the
+  # append-only log is needed — counters are ephemeral.
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vss-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - vss-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # Ollama — local LLM/VLM + embeddings (NVIDIA Cosmos-Reason2-2B +
+  # bge-m3) for offline dev/testing. GPU-backed on hosts with NVIDIA
+  # GPUs; falls back to CPU otherwise (slower). Models persist in the
+  # ollama-models volume — first pull with:
+  #   docker compose up -d ollama
+  #   docker compose exec ollama ollama pull hf.co/apolo13x/Cosmos-Reason2-2B-GGUF:Q4_K_M
+  #   docker compose exec ollama ollama pull bge-m3
+  # Reachable as http://ollama:11434 from other compose services and as
+  # http://localhost:${OLLAMA_HOST_PORT:-11435} from the host. Point the
+  # UI at it with OLLAMA_BASE_URL / OLLAMA_VLM_MODEL / OLLAMA_EMBED_MODEL.
+  # ──────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_HOST_PORT:-11435}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # VSS UI — Next.js console. Horizontally scalable:
+  #   docker compose up --scale vss-ui=3
+  # (no container_name on purpose — it would prevent scaling.) Every replica
+  # serves traffic AND runs the embedding worker poller; Postgres SKIP LOCKED
+  # deals each video job to exactly one replica. Video/frame objects live on
+  # the shared vss-video-storage volume (single-host compose); multi-host
+  # needs an S3-compatible mount at the same VIDEO_UPLOAD_DIR path.
+  #
+  # Connection budget (keep in sync with vss-auth-db PG_MAX_CONNECTIONS):
+  #   replicas × PG_POOL_MAX + ~20 headroom ≤ PG_MAX_CONNECTIONS
+  #   e.g. 3 × 10 + 20 = 50 ≤ 200. Raise both together when scaling out.
+  # ──────────────────────────────────────────────
+  vss-ui:
+    build:
+      context: .
+      dockerfile: ui/apps/vss-ui/Dockerfile
+    expose:
+      - "3000"
+    depends_on:
+      vss-auth-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgresql://vss:vss_secret@vss-auth-db:5432/vss_auth
+      - REDIS_URL=redis://vss-redis:6379
+      - VIDEO_UPLOAD_DIR=/data/videos
+      - PG_POOL_MAX=${PG_POOL_MAX:-10}
+      - VIDEO_WORKER_ENABLED=${VIDEO_WORKER_ENABLED:-true}
+      - VIDEO_WORKER_INLINE=${VIDEO_WORKER_INLINE:-false}
+      - VIDEO_WORKER_CONCURRENCY=${VIDEO_WORKER_CONCURRENCY:-2}
+      - ENTITLEMENTS_CACHE_TTL_MS=${ENTITLEMENTS_CACHE_TTL_MS:-20000}
+      - HF_API_KEY=${HF_API_KEY:-}
+      - HF_EMBEDDING_MODEL=${HF_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - HF_VLM_MODEL=${HF_VLM_MODEL:-Qwen/Qwen3-VL-30B-A3B-Instruct}
+      - HF_FRAME_INTERVAL=${HF_FRAME_INTERVAL:-5}
+      - HF_MAX_FRAMES=${HF_MAX_FRAMES:-20}
+      - HF_CONCURRENCY=${HF_CONCURRENCY:-8}
+    volumes:
+      - vss-video-storage:/data/videos
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/healthz').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # Load balancer for the vss-ui replicas (see docker/nginx-vss-ui.conf).
+  # Re-resolves replica DNS on the fly, so --scale needs no reload.
+  # No sticky sessions: auth is stateless JWT, shared state is Postgres /
+  # Redis / the shared volume. Reach the console at localhost:${UI_PORT:-3000}.
+  # ──────────────────────────────────────────────
+  vss-ui-lb:
+    image: nginx:1.27-alpine
+    container_name: vss-ui-lb
+    ports:
+      - "${UI_PORT:-3000}:80"
+    volumes:
+      - ./docker/nginx-vss-ui.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - vss-ui
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # vLLM — LLM and VLM serving on the GPU server.
+  # The default for this repo (smaller VRAM footprint than NIMs).
+  # See ./models/vllm/ for HF model choices and pull command.
+  # Set LLM_MODEL_TYPE=openai + VLM_MODEL_TYPE=openai in .env.
+  # ──────────────────────────────────────────────
+  vss-llm-vllm:
+    image: vllm/vllm-openai:v0.6.6.post1
+    container_name: vss-llm-vllm
+    runtime: nvidia
+    shm_size: 16gb
+    ports:
+      - "${LLM_VLLM_PORT:-30092}:8000"
+    volumes:
+      - vllm_llm_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: "${HF_TOKEN:-}"
+    command:
+      - --model=nvidia/NVIDIA-Nemotron-Nano-9B-v2-FP8
+      - --host=0.0.0.0
+      - --port=8000
+      - --dtype=auto
+      - --max-model-len=16384
+      - --gpu-memory-utilization=0.85
+      - --trust-remote-code
+      - --served-model-name=nvidia/NVIDIA-Nemotron-Nano-9B-v2-FP8
+      - --enable-auto-tool-choice
+      - --tool-call-parser=hermes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+              device_ids: ["${LLM_VLLM_DEVICE_ID:-0}"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 600s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  vss-vlm-vllm:
+    image: vllm/vllm-openai:v0.6.6.post1
+    container_name: vss-vlm-vllm
+    runtime: nvidia
+    shm_size: 16gb
+    ports:
+      - "${VLM_VLLM_PORT:-30091}:8000"
+    volumes:
+      - vllm_vlm_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: "${HF_TOKEN:-}"
+    command:
+      - --model=nvidia/Cosmos-Reason1-7B
+      - --host=0.0.0.0
+      - --port=8000
+      - --dtype=bfloat16
+      - --max-model-len=16384
+      - --gpu-memory-utilization=0.90
+      - --trust-remote-code
+      - --served-model-name=nvidia/Cosmos-Reason1-7B
+      - --limit-mm-per-prompt={"image":1,"video":1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+              device_ids: ["${VLM_VLLM_DEVICE_ID:-0}"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 600s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  ## ──────────────────────────────────────────────
+  ## VSS UI — run locally with: pnpm dev
+  ## See instructions at end of output
+  ## ──────────────────────────────────────────────
+  # vss-ui:
+  #   build:
+  #     context: .
+  #     dockerfile: ui/Dockerfile
+  #   container_name: vss-ui
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - vss-agent
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://vss-agent:8000
+  #   networks:
+  #     - vss-net
+
+  # ──────────────────────────────────────────────
+  # VST — Video Storage Tool (NVIDIA NIM). REQUIRED for actual video upload
+  # and retrieval — the agent's vst.* tools all hit this. Pull is gated
+  # (gated NGC image) so it's commented out by default. To enable:
+  #   1. Sign in to nvcr.io (see models/pull.cmd)
+  #   2. Uncomment the block below
+  #   3. Bring the agent up:  docker compose up -d vss-agent vst
+  # ──────────────────────────────────────────────
+  # vst:
+  #   image: nvcr.io/nvidia/vst:latest
+  #   container_name: vst
+  #   runtime: nvidia
+  #   ports:
+  #     - "30101:30101"
+  #   environment:
+  #     - NGC_API_KEY=${NGC_CLI_API_KEY:?err}
+  #   volumes:
+  #     - vss-uploads:/workspace/uploads
+  #   networks:
+  #     - vss-net
+
+  # ──────────────────────────────────────────────
+  # NIM model services (alternative to vLLM, for H100/A100 80GB).
+  # See ./models/vlm and ./models/llm for declarative specs.
+  # Set LLM_MODEL_TYPE=nim + VLM_MODEL_TYPE=nim in .env to switch.
+  # ──────────────────────────────────────────────
+  # vss-vlm-nim:
+  #   image: ${VLM_NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3-reasoner:1.7}
+  #   container_name: vss-vlm-nim
+  #   runtime: nvidia
+  #   shm_size: 32gb
+  #   ports:
+  #     - "${VLM_PORT:-30082}:8000"
+  #   environment:
+  #     - NGC_API_KEY=${NGC_CLI_API_KEY:?NGC_CLI_API_KEY required}
+  #     - NIM_MODEL_NAME=${VLM_NIM_MODEL_NAME:-cosmos3-reasoner}
+  #   volumes:
+  #     - cosmos3_reasoner_cache:/opt/nim/.cache
+  #   networks:
+  #     - vss-net
+  #
+  # vss-llm-nim:
+  #   image: ${LLM_NIM_IMAGE:-nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant}
+  #   container_name: vss-llm-nim
+  #   runtime: nvidia
+  #   shm_size: 16GB
+  #   ports:
+  #     - "${LLM_PORT:-30081}:8000"
+  #   environment:
+  #     - NGC_API_KEY=${NGC_CLI_API_KEY:?NGC_CLI_API_KEY required}
+  #     - NIM_MODEL_NAME=${LLM_NIM_MODEL_NAME:-nvidia/nemotron-3.5-lightning-30b-a3b}
+  #     - NIM_SERVED_MODEL_NAME=${LLM_NIM_SERVED_MODEL_NAME:-nvidia/nemotron-3.5-lightning-30b-a3b}
+  #   volumes:
+  #     - nemotron_3_5_lightning_cache:/opt/nim/.cache
+  #   networks:
+  #     - vss-net
+
+volumes:
+  vss-uploads:
+  vss-auth-data:
+  vss-video-storage:
+  vss-redis-data:
+  ollama-models:
+  vllm_llm_cache:
+  vllm_vlm_cache:
+  cosmos3_reasoner_cache:
+  nemotron_3_5_lightning_cache:
+
+networks:
+  vss-net:
+    driver: bridge

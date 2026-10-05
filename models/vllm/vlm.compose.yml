@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Self-hosted vLLM serving nvidia/Cosmos-Reason1-7B for the VSS agent.
+# Composes alongside models/llm/llm.compose.yml and the vss-agent service.
+#
+# Why vLLM and not the NIM:
+#   - 7B BF16 ≈ 14 GB, fits on a single 24 GB GPU
+#   - No NGC key needed (HF is public)
+#   - OpenAI-compatible surface; the agent's `openai_vlm` profile just works
+#
+# Bring up:   docker compose -f models/vllm/vlm.compose.yml up -d
+# Tear down:  docker compose -f models/vllm/vlm.compose.yml down
+#
+# Once up, point the agent at it:
+#   VLM_MODEL_TYPE=openai
+#   VLM_NAME=nvidia/Cosmos-Reason1-7B
+#   VLM_BASE_URL=http://vss-vlm-vllm:8000/v1
+
+services:
+  vss-vlm-vllm:
+    image: vllm/vllm-openai:v0.6.6.post1
+    container_name: vss-vlm-vllm
+    runtime: nvidia
+    shm_size: 16gb
+    ports:
+      - "${VLM_VLLM_PORT:-30091}:8000"
+    volumes:
+      - vllm_vlm_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: "${HF_TOKEN:-}"
+      # Cosmos-Reason1 expects a max-model-len around 16k because of vision tokens
+      VLLM_MAX_MODEL_LEN: "16384"
+      VLLM_GPU_MEM_UTIL: "0.90"
+    command:
+      - --model=nvidia/Cosmos-Reason1-7B
+      - --host=0.0.0.0
+      - --port=8000
+      - --dtype=bfloat16
+      - --max-model-len=16384
+      - --gpu-memory-utilization=0.90
+      - --trust-remote-code
+      - --served-model-name=nvidia/Cosmos-Reason1-7B
+      - --limit-mm-per-prompt={"image":1,"video":1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+              device_ids: ["${VLM_VLLM_DEVICE_ID:-0}"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 600s          # vLLM cold-start; allow up to 10 min
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+volumes:
+  vllm_vlm_cache:
+
+networks:
+  vss-net:
+    external: true
+    name: video-insight-hub_vss-net

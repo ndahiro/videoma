@@ -1,0 +1,227 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   VIDEOMA — Broadcast control room
+   A warm-ink, hairline-bordered, sodium-amber accented interface inspired
+   by post-production consoles. Editorial serif headlines, monospaced
+   timecodes, generous whitespace, no glassmorphism.
+   ========================================================================= */
+
+:root {
+  /* Surfaces — warm ink, never blue-black */
+  --background: 30 14% 6%;            /* #0E0D0B */
+  --foreground: 36 25% 93%;           /* #F4F1EA */
+  --card: 30 12% 9%;                  /* #171613 */
+  --card-foreground: 36 25% 93%;
+  --card-border: 30 10% 16%;          /* #2A2723 */
+  --popover: 30 12% 9%;
+  --popover-foreground: 36 25% 93%;
+  --popover-border: 30 10% 16%;
+
+  /* Brand: sodium-vapor amber — the signature */
+  --primary: 32 88% 59%;              /* #F2A33A */
+  --primary-foreground: 30 14% 6%;    /* ink on amber */
+  --secondary: 30 10% 16%;
+  --secondary-foreground: 36 25% 93%;
+  --muted: 30 10% 16%;
+  --muted-foreground: 33 8% 58%;      /* #8A857C */
+  --accent: 32 88% 59%;
+  --accent-foreground: 30 14% 6%;
+  --destructive: 8 73% 57%;           /* #E94B3C — recording red */
+  --destructive-foreground: 36 25% 93%;
+
+  --border: 30 10% 16%;
+  --input: 30 12% 11%;
+  --ring: 32 88% 59%;
+
+  /* Sidebar = same panel as content, no special chrome */
+  --sidebar: 30 12% 9%;
+  --sidebar-foreground: 36 25% 93%;
+  --sidebar-border: 30 10% 16%;
+  --sidebar-primary: 32 88% 59%;
+  --sidebar-primary-foreground: 30 14% 6%;
+  --sidebar-accent: 30 12% 12%;
+  --sidebar-accent-foreground: 36 25% 93%;
+  --sidebar-ring: 32 88% 59%;
+
+  /* Status colors */
+  --ok: 92 35% 53%;                   /* #7FB069 — ready */
+  --warn: 32 88% 59%;                 /* sodium amber — processing */
+  --err: 8 73% 57%;                   /* recording red — errors */
+
+  /* Type */
+  --app-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --app-font-serif: 'Fraunces', 'Georgia', serif;
+  --app-font-mono: 'JetBrains Mono', 'Space Mono', Menlo, monospace;
+
+  /* Geometry */
+  --radius: 4px;                      /* precise, not pillowy */
+
+  /* Hairline shadows (no drop shadows for drop shadow's sake) */
+  --hairline: 0 0 0 1px hsl(var(--border));
+
+  --button-outline: hsl(30 10% 22%);
+  --badge-outline: hsl(30 10% 22%);
+  --elevate-1: hsl(30 14% 12% / 0.6);
+  --elevate-2: hsl(30 14% 14% / 0.8);
+
+  /* Light mode — flip surface to warm bone */
+  .light &, .light {
+    --background: 36 33% 94%;          /* #F4F1EA */
+    --foreground: 30 14% 10%;
+    --card: 36 33% 96%;
+    --card-foreground: 30 14% 10%;
+    --card-border: 33 12% 78%;
+    --popover: 36 33% 96%;
+    --popover-foreground: 30 14% 10%;
+    --popover-border: 33 12% 78%;
+    --primary: 28 82% 46%;             /* deeper amber on bone */
+    --primary-foreground: 36 33% 96%;
+    --secondary: 33 12% 86%;
+    --secondary-foreground: 30 14% 10%;
+    --muted: 33 12% 86%;
+    --muted-foreground: 30 8% 36%;
+    --accent: 28 82% 46%;
+    --accent-foreground: 36 33% 96%;
+    --destructive: 8 73% 47%;
+    --destructive-foreground: 36 33% 96%;
+    --border: 33 12% 78%;
+    --input: 33 12% 86%;
+    --ring: 28 82% 46%;
+    --sidebar: 36 33% 96%;
+    --sidebar-foreground: 30 14% 10%;
+    --sidebar-border: 33 12% 78%;
+    --sidebar-primary: 28 82% 46%;
+    --sidebar-primary-foreground: 36 33% 96%;
+    --sidebar-accent: 33 12% 90%;
+    --sidebar-accent-foreground: 30 14% 10%;
+    --sidebar-ring: 28 82% 46%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html, body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  body {
+    @apply font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.35);
+    color: hsl(var(--foreground));
+  }
+
+  /* Headings: serif display */
+  h1, h2, h3 {
+    font-family: var(--app-font-serif);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+  }
+
+  /* Tabular numerics for monospace use cases */
+  .font-mono, code, kbd {
+    font-feature-settings: "tnum", "zero";
+  }
+}
+
+@layer utilities {
+  input[type="search"]::-webkit-search-cancel-button {
+    @apply hidden;
+  }
+
+  [contenteditable][data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    pointer-events: none;
+  }
+
+  /* Hairline divider */
+  .hr-hairline {
+    border-top: 1px solid hsl(var(--border));
+  }
+
+  /* Mono-eyebrow label (used for section labels) */
+  .eyebrow {
+    font-family: var(--app-font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Timecode display */
+  .timecode {
+    font-family: var(--app-font-mono);
+    font-feature-settings: "tnum";
+    letter-spacing: 0.02em;
+  }
+
+  /* Tape loading bar */
+  .tape-bar {
+    position: relative;
+    overflow: hidden;
+    height: 2px;
+    background: hsl(var(--border));
+  }
+  .tape-bar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 30%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary) / 0.9),
+      hsl(var(--primary)),
+      transparent
+    );
+    animation: tape-stripe 1.6s linear infinite;
+  }
+  @keyframes tape-stripe {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+
+  /* Recording-red live indicator */
+  .rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: hsl(var(--destructive));
+    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.6);
+    animation: rec-pulse 1.6s ease-out infinite;
+  }
+  @keyframes rec-pulse {
+    0%   { box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.6); }
+    70%  { box-shadow: 0 0 0 8px hsl(var(--destructive) / 0); }
+    100% { box-shadow: 0 0 0 0 hsl(var(--destructive) / 0); }
+  }
+
+  /* Film-strip perforation */
+  .perf {
+    background-image: radial-gradient(
+      circle,
+      hsl(var(--background)) 2px,
+      transparent 2.5px
+    );
+    background-size: 16px 16px;
+    background-position: 0 center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tape-bar::after,
+    .rec-dot {
+      animation: none;
+    }
+  }
+}

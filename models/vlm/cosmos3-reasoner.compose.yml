@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mirrored from upstream:
+#   https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization/blob/develop/deploy/docker/services/nim/cosmos3-reasoner/compose.yml
+#
+# Local changes:
+#   - profiles stripped (these are unconditional in the offline stack)
+#   - HW_PROFILE env_file indirection removed; sizing baked from the upstream
+#     hw-H100.env defaults (the most common dev hardware)
+#   - no vss-vlm-nim alias collision with the vss-net bridge used by docker-compose
+#
+# Bring up:   docker compose -f models/vlm/cosmos3-reasoner.compose.yml up -d
+# Tear down:  docker compose -f models/vlm/cosmos3-reasoner.compose.yml down
+
+services:
+  cosmos3-reasoner:
+    image: ${VLM_NIM_IMAGE:-nvcr.io/nim/nvidia/cosmos3-reasoner:1.7}
+    container_name: vss-vlm-nim
+    runtime: nvidia
+    shm_size: 32gb
+    ports:
+      - "${VLM_PORT:-30082}:8000"
+    networks:
+      - vss-net
+    environment:
+      NGC_API_KEY: "${NGC_CLI_API_KEY:?NGC_CLI_API_KEY required to pull / run NIMs}"
+      NIM_MODEL_NAME: "${VLM_NIM_MODEL_NAME:-cosmos3-reasoner}"
+      NIM_MODEL_SIZE: "${NIM_MODEL_SIZE:-nano}"
+    volumes:
+      - cosmos3_reasoner_cache:/opt/nim/.cache
+    user: "${UID:-1000}:${GID:-1000}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+              device_ids: ["${VLM_DEVICE_ID:-0}"]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "if [ -f /tmp/ready_done ]; then curl --max-time 30 -f http://localhost:8000/v1/health/live; else elapsed=0; while ! curl -fs http://localhost:8000/v1/health/ready > /dev/null 2>&1; do sleep 5; elapsed=$$((elapsed+5)); if [ $$elapsed -ge 600 ]; then echo 'timeout'; exit 1; fi; done; touch /tmp/ready_done && curl --max-time 30 -f http://localhost:8000/v1/health/live; fi"
+      interval: 60s
+      timeout: 650s
+      retries: 2
+
+volumes:
+  cosmos3_reasoner_cache:
+
+networks:
+  vss-net:
+    external: true
+    name: video-insight-hub_vss-net

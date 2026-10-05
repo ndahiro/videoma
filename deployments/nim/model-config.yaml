@@ -1,0 +1,26 @@
+# NVIDIA NIM Model Configuration
+# Reference: https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization
+
+models:
+  vlm:
+    name: nvidia/cosmos-reason2-8b
+    base_url: http://vlm:8001/v1
+    type: vision-language
+    description: "VLM for video understanding and visual reasoning"
+
+  llm:
+    name: nvidia/nvidia-nemotron-nano-9b-v2
+    base_url: http://llm:8002/v1
+    type: large-language
+    description: "LLM for text generation and summarization"
+
+inference:
+  vlm:
+    max_tokens: 4096
+    temperature: 0.2
+    top_p: 0.95
+
+  llm:
+    max_tokens: 2048
+    temperature: 0.1
+    top_p: 0.95

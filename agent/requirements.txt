@@ -1,0 +1,50 @@
+# NVIDIA VSS Agent Dependencies (pip-compatible version of pyproject.toml)
+# =====================================================================
+# For full uv-based development workflow, use:
+#   uv sync
+# which reads pyproject.toml directly.
+#
+# Extra package indices required:
+#   --extra-index-url https://pypi.nvidia.com/nvidia-nat/
+#   --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# Python >= 3.13, < 3.15 is required.
+
+# === Core framework (NVIDIA AIQ Toolkit / NAT) ===
+nvidia-nat[async-endpoints,langchain,mcp,opentelemetry,phoenix,profiling,s3]==1.5.0a20260218
+
+# === LangChain / LangGraph ===
+langchain-core>=1.2.11
+langchain-nvidia-ai-endpoints>=1.0.4
+langgraph-checkpoint>=4.0.0
+
+# === ASGI / API ===
+starlette>=0.49.1
+python-multipart>=0.0.22
+# fastapi is overridden by pyproject.toml for starlette compatibility
+
+# === MCP (Model Context Protocol) ===
+mcp>=1.23.0
+
+# === Data validation ===
+pydantic>=2.11,<3
+
+# === Search / Vector ===
+elasticsearch~=8.17.0
+duckdb>=1.5.0.dev44
+sentence-transformers>=3.0.0
+
+# === ML / AI ===
+torch>=2.5.0
+tiktoken>=0.9.0
+opencv-python-headless>=4.13.0.92
+
+# === Report generation ===
+markdown>=3.4.0
+matplotlib>=3.8.0
+xhtml2pdf>=0.2.11
+
+# === Infrastructure ===
+docker>=7.1.0
+protobuf>=6.33.5
+urllib3>=2.6.3

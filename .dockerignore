@@ -1,0 +1,19 @@
+# Keep Docker build contexts small and hermetic: dependencies are always
+# installed fresh inside the image (pnp/pnpm store), never copied from host.
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/.parcel-cache
+.git
+.gitignore
+**/*.tsbuildinfo
+**/.env
+**/.env.local
+**/.env.*.local
+**/coverage
+**/.nyc_output
+**/playwright-report
+**/test-results
+.DS_Store
+Thumbs.db

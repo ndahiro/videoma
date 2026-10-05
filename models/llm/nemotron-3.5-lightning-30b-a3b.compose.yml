@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mirrored from upstream:
+#   https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization/blob/develop/deploy/docker/services/nim/nemotron-3.5-lightning-30b-a3b/compose.yml
+#
+# Local changes:
+#   - profiles stripped (these are unconditional in the offline stack)
+#   - the upstream `init` sidecar (alpine chmod) is preserved as `nemotron-init`
+#     and `depends_on: service_completed_successfully` is wired
+#   - HW_PROFILE env_file indirection removed
+#
+# Bring up:   docker compose -f models/llm/nemotron-3.5-lightning-30b-a3b.compose.yml up -d
+# Tear down:  docker compose -f models/llm/nemotron-3.5-lightning-30b-a3b.compose.yml down
+
+services:
+  nemotron-init:
+    image: alpine:3.24.1
+    container_name: llm-nim-init
+    user: root
+    volumes:
+      - nemotron_3_5_lightning_cache:/opt/nim/.cache
+    command: ["sh", "-c", "chmod -R 777 /opt/nim/.cache"]
+    restart: "no"
+    networks:
+      - vss-net
+
+  nemotron-3.5-lightning-30b-a3b:
+    image: ${LLM_NIM_IMAGE:-nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant}
+    container_name: vss-llm-nim
+    runtime: nvidia
+    shm_size: 16GB
+    ports:
+      - "${LLM_PORT:-30081}:8000"
+    networks:
+      - vss-net
+    environment:
+      NGC_API_KEY: "${NGC_CLI_API_KEY:?NGC_CLI_API_KEY required to pull / run NIMs}"
+      NIM_MODEL_NAME: "${LLM_NIM_MODEL_NAME:-nvidia/nemotron-3.5-lightning-30b-a3b}"
+      NIM_SERVED_MODEL_NAME: "${LLM_NIM_SERVED_MODEL_NAME:-nvidia/nemotron-3.5-lightning-30b-a3b}"
+    volumes:
+      - nemotron_3_5_lightning_cache:/opt/nim/.cache
+    user: "${UID:-1000}:${GID:-1000}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+              device_ids: ["${LLM_DEVICE_ID:-0}"]
+    restart: unless-stopped
+    depends_on:
+      nemotron-init:
+        condition: service_completed_successfully
+        required: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "if [ -f /tmp/ready_done ]; then curl --max-time 30 -f http://localhost:8000/v1/health/live; else elapsed=0; while ! curl -fs http://localhost:8000/v1/health/ready > /dev/null 2>&1; do sleep 5; elapsed=$$((elapsed+5)); if [ $$elapsed -ge 600 ]; then echo 'timeout'; exit 1; fi; done; touch /tmp/ready_done && curl --max-time 30 -f http://localhost:8000/v1/health/live; fi"
+      interval: 60s
+      timeout: 650s
+      retries: 2
+
+volumes:
+  nemotron_3_5_lightning_cache:
+
+networks:
+  vss-net:
+    external: true
+    name: video-insight-hub_vss-net

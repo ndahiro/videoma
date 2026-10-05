@@ -1,0 +1,190 @@
+version: "3.9"
+
+# =============================================================================
+# NVIDIA VSS Blueprint — Full Deployment Profile
+# =============================================================================
+# Matches reference deployments/agents/vss-agent/vss-agent-docker-compose.yml
+# The restored agent uses `nat serve` on port 8000.
+#
+# Prerequisites:
+#   - NVIDIA Container Toolkit
+#   - NVIDIA AI Enterprise license (for NIM containers)
+#   - NGC API key configured
+#
+# Reference: https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization
+# =============================================================================
+
+services:
+  # ──────────────────────────────────────────────
+  # VSS Agent (restored from reference)
+  # Uses nat serve with a config.yml profile
+  # ──────────────────────────────────────────────
+  agent:
+    build:
+      context: ../../agent
+      dockerfile: docker/Dockerfile
+    container_name: vss-agent
+    ports:
+      - "${VSS_AGENT_PORT:-8000}:8000"
+    command:
+      - serve
+      - --config_file
+      - /vss-agent/deployments/developer-workflow/${BP_PROFILE:-dev-profile-base}/vss-agent/configs/config.yml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "${VSS_AGENT_PORT:-8000}"
+    environment:
+      # Core
+      - BP_PROFILE=${BP_PROFILE:-dev-profile-base}
+      - VSS_AGENT_PORT=${VSS_AGENT_PORT:-8000}
+      - VSS_AGENT_URL=${VSS_AGENT_URL:-http://vss-agent:8000}
+      - VSS_AGENT_HOST=vss-agent
+      - VSS_AGENT_VERSION=${VSS_AGENT_VERSION:-latest}
+      - HOST_IP=${HOST_IP:-127.0.0.1}
+      - NGC_CLI_API_KEY=${NGC_CLI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_BASE_URL=${HF_BASE_URL:-https://router.huggingface.co/hf-inference/v1}
+      - HF_LLM_NAME=${HF_LLM_NAME:-meta-llama/Llama-3.3-70B-Instruct}
+      - HF_VLM_NAME=${HF_VLM_NAME:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - HF_EMBED_NAME=${HF_EMBED_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBED_PROVIDER=${EMBED_PROVIDER:-huggingface}
+
+      # NAT / Agent config
+      - VSS_AGENT_CONFIG_FILE=/vss-agent/deployments/developer-workflow/${BP_PROFILE:-dev-profile-base}/vss-agent/configs/config.yml
+
+      # VST
+      - VST_BASE_URL=${VST_INTERNAL_URL:-http://vst:30101}
+      - VST_INTERNAL_URL=${VST_INTERNAL_URL:-http://vst:30101}
+      - VST_EXTERNAL_URL=${VST_EXTERNAL_URL:-http://vst:30101}
+
+      # LLM / VLM endpoints
+      - VLM_BASE_URL=${VLM_BASE_URL:-http://vlm:8001/v1}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://llm:8002/v1}
+      - VLM_MODEL_TYPE=${VLM_MODEL_TYPE:-nim_vlm}
+      - LLM_MODEL_TYPE=${LLM_MODEL_TYPE:-nim_llm}
+
+      # Telemetry
+      - PHOENIX_COLLECTOR_ENDPOINT=${PHOENIX_COLLECTOR_ENDPOINT:-}
+
+      # Object store
+      - VSS_AGENT_OBJECT_STORE_TYPE=${VSS_AGENT_OBJECT_STORE_TYPE:-in_memory}
+
+    volumes:
+      - ../../deployments:/vss-agent/deployments:ro
+      - vss-uploads:/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${VSS_AGENT_PORT:-8000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # VSS UI (reference VSS UI app)
+  # ──────────────────────────────────────────────
+  ui:
+    build:
+      context: ../../ui/apps/nv-metropolis-bp-vss-ui
+      dockerfile: Dockerfile
+    container_name: vss-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      agent:
+        condition: service_healthy
+    environment:
+      - NEXT_PUBLIC_API_URL=http://agent:8000
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # NVIDIA NIM — VLM (Vision Language Model)
+  # ──────────────────────────────────────────────
+  vlm:
+    image: nvcr.io/nvidia/cosmos-reason2-8b:latest
+    container_name: vss-vlm
+    ports:
+      - "8001:8001"
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NGC_API_KEY=${NGC_API_KEY:?err}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # NVIDIA NIM — LLM (Large Language Model)
+  # ──────────────────────────────────────────────
+  llm:
+    image: nvcr.io/nvidia/nemotron-nano-9b-v2:latest
+    container_name: vss-llm
+    ports:
+      - "8002:8002"
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NGC_API_KEY=${NGC_API_KEY:?err}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # VST — Video Storage Tool
+  # ──────────────────────────────────────────────
+  vst:
+    image: nvcr.io/nvidia/vst:latest
+    container_name: vss-vst
+    ports:
+      - "30101:30101"
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY:?err}
+    networks:
+      - vss-net
+
+  # ──────────────────────────────────────────────
+  # Elasticsearch — metadata and full-text search
+  # ──────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: vss-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - ingest.geoip.downloader.enabled=false
+    ports:
+      - "9200:9200"
+    networks:
+      - vss-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  vss-uploads:
+
+networks:
+  vss-net:
+    driver: bridge

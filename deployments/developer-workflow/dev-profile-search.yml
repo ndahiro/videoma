@@ -1,0 +1,86 @@
+version: "3.9"
+
+# =============================================================================
+# VSS Blueprint — Development Profile (Search)
+# =============================================================================
+# Lightweight development profile for local testing without NIM/VST.
+# The restored agent uses nat serve on port 8000.
+#
+# Usage:
+#   docker compose -f dev-profile-search.yml up --build
+# =============================================================================
+
+services:
+  # ──────────────────────────────────────────────
+  # VSS Agent — restored from reference
+  # Dev mode: builds from local source
+  # ──────────────────────────────────────────────
+  agent:
+    build:
+      context: ../../agent
+      dockerfile: docker/Dockerfile
+    container_name: vss-agent-dev
+    ports:
+      - "8000:8000"
+    command:
+      - serve
+      - --config_file
+      - /vss-agent/deployments/developer-workflow/dev-profile-search/vss-agent/configs/config.yml
+      - --host
+      - 0.0.0.0
+      - --port
+      - 8000
+    env_file:
+      - ../../deployments/developer-workflow/dev-profile-search/.env
+    environment:
+      - BP_PROFILE=dev-profile-search
+      - VSS_AGENT_PORT=8000
+      - VSS_AGENT_URL=http://host.docker.internal:8000
+      - VSS_AGENT_HOST=agent
+      - VSS_AGENT_CONFIG_FILE=/vss-agent/deployments/developer-workflow/dev-profile-search/vss-agent/configs/config.yml
+      - VLM_BASE_URL=
+      - LLM_BASE_URL=
+      - NGC_CLI_API_KEY=
+      - NVIDIA_API_KEY=
+      - HOST_IP=host.docker.internal
+      - VSS_AGENT_OBJECT_STORE_TYPE=in_memory
+      - VST_INTERNAL_URL=
+      - VST_EXTERNAL_URL=
+      - VST_BASE_URL=
+    volumes:
+      - ../../deployments:/vss-agent/deployments:ro
+      - ../../agent/src:/vss-agent/src
+      - vss-uploads-dev:/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - vss-net-dev
+
+  # ──────────────────────────────────────────────
+  # VSS UI — reference VSS UI app
+  # ──────────────────────────────────────────────
+  ui:
+    build:
+      context: ../../ui/apps/nv-metropolis-bp-vss-ui
+      dockerfile: Dockerfile.dev
+    container_name: vss-ui-dev
+    ports:
+      - "3000:80"
+    depends_on:
+      agent:
+        condition: service_healthy
+    environment:
+      - NEXT_PUBLIC_API_URL=http://agent:8000
+    networks:
+      - vss-net-dev
+
+volumes:
+  vss-uploads-dev:
+
+networks:
+  vss-net-dev:
+    driver: bridge
